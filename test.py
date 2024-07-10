@@ -1,7 +1,12 @@
-import ultralytics.nn.modules.head
-from ultralytics.utils import ARM64, IS_JETSON, IS_RASPBERRYPI, LINUX, LOGGER, ROOT, yaml_load
-from torchsummary import summary
+from ultralytics import YOLO
 
-FCN = ultralytics.nn.modules.head.DetectFCN
+
+# Initialize model
+
+
+
+model = YOLO("yolov8l-obb.yaml")
+
+model.train(data="testing.yaml", epochs=10, imgsz=640)
 
 

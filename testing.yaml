@@ -1,0 +1,7 @@
+train: ./Testing/images/train  # train images (relative to 'path') 128 images
+val: ./Testing/images/val # val images (relative to 'path') 128 images
+# test:  # test images (optional)
+
+# Classes
+nc: 3  # number of classes
+names: ["complete", "incomplete" , "hair"  ]  # class names

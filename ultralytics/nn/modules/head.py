@@ -35,23 +35,38 @@ class Detect(nn.Module):
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
+        
         self.cv2 = nn.ModuleList(
             nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
         )
+        
         self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+        
+        
 
     def forward(self, x):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
+        
         for i in range(self.nl):
+
+            
             x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+            #print(self.cv2[i](x[i]).shape)
+            #print(self.cv3[i](x[i]).shape)
+            
+            print('The cat result of shape x[i]', i)
+            print(x[i].shape)
         if self.training:  # Training path
             return x
 
         # Inference path
         shape = x[0].shape  # BCHW
         x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        print('x_cat size is')
+        print(x_cat.shape)
         if self.dynamic or self.shape != shape:
+            print("self.dynamic or self.shape != shape: ")
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
             self.shape = shape
 
@@ -106,23 +121,26 @@ class DetectFCN(nn.Module):
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
-        
-        self.fc1box2cls = nn.Linear( self.fli, self.nc) 
-        
+        self.c2 = c2 , self.c3 = c3
+        self.fc1box2cls = nn.Linear(4 * self.reg_max, self.nc) 
         self.cv2 = nn.ModuleList(
-            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch # predict the bounnding box
+            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch 
         )
         
-        #self.boxtocv3 = nn.ModuleList(nn.Sequential(Conv(x, c2, 3), Conv(c3, c3, 3)) for x in ch) # predict the class
+        
+        self.boxtocv3 = nn.ModuleList(nn.Sequential(nn.Flatten()) for x in ch)
+
         self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3) , nn.Conv2d(c3, self.nc, 1)) for x in ch)
         
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
 
     def forward(self, x):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
+        c2 = self.c2 , c3 = self.c3
         for i in range(self.nl):
             #box_info = self.cv2[i](x[i]) # get the information of the bounding box , output of cv2
             
+
             x[i] = torch.cat( self.cv2[i](x[i]), self.cv3[i](x[i]), 1)
     
         if self.training:  # Training path
@@ -142,8 +160,6 @@ class DetectFCN(nn.Module):
             cls = x_cat[:, self.reg_max * 4 :]
         else:
             box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
-
-        
 
         
 
