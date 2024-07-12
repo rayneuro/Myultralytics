@@ -32,6 +32,7 @@ class Detect(nn.Module):
         self.nc = nc  # number of classes
         self.nl = len(ch)  # number of detection layers
         self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
+        
         self.no = nc + self.reg_max * 4  # number of outputs per anchor
         self.stride = torch.zeros(self.nl)  # strides computed during build
         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
@@ -51,23 +52,41 @@ class Detect(nn.Module):
         for i in range(self.nl):
 
             
-            x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+            #print(x[i])
+
+            x_box = self.cv2[i](x[i])
+            x_cls = self.cv3[i](x[i])
+            print('at' , i , "channel ")
+            print('x_box input shape is ')
+            print(x_box.shape)
+            print('x_cls input shape is ')
+            print(x_cls.shape)
+
+            #x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+            x[i] = torch.cat((x_box,x_cls),1)
+            
+
+            
             #print(self.cv2[i](x[i]).shape)
             #print(self.cv3[i](x[i]).shape)
-            
-            print('The cat result of shape x[i]', i)
+            print('The cat result of shape cv2 cv3 at i =', i)
             print(x[i].shape)
+            print("###################")
+            
         if self.training:  # Training path
             return x
 
         # Inference path
         shape = x[0].shape  # BCHW
         x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
-        print('x_cat size is')
+        print('x_cat size torch.cat([xi.view(shape[0], self.no, -1) for xi in x]is ')
         print(x_cat.shape)
         if self.dynamic or self.shape != shape:
-            print("self.dynamic or self.shape != shape: ")
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
+            print('The anchor shape is:')
+            print(self.anchors.shape)
+            print('The strides shape is :')
+            print(self.strides.shape)
             self.shape = shape
 
         if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:  # avoid TF FlexSplitV ops
@@ -75,6 +94,9 @@ class Detect(nn.Module):
             cls = x_cat[:, self.reg_max * 4 :]
         else:
             box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+
+        print('box shape is ' , box.shape)
+        print('cls shape is ' , cls.shape)
 
         if self.export and self.format in {"tflite", "edgetpu"}:
             # Precompute normalization factor to increase numerical stability
@@ -86,6 +108,15 @@ class Detect(nn.Module):
             dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+            print('after decode boxes dbox size is : ')
+            print(dbox.shape)
+
+        # cls = cls * 
+
+        print('test transpose')
+        dboxtr = dbox.transpose(1,2)
+        print(dboxtr.shape)
+        
 
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
@@ -128,9 +159,10 @@ class DetectFCN(nn.Module):
         )
         
         
-        self.boxtocv3 = nn.ModuleList(nn.Sequential(nn.Flatten()) for x in ch)
 
         self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3) , nn.Conv2d(c3, self.nc, 1)) for x in ch)
+        
+        self.get_info_4dbox = nn.ModuleList(nn.Sequential(nn.Flatten()) for x in ch)
         
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
 
@@ -140,9 +172,8 @@ class DetectFCN(nn.Module):
         for i in range(self.nl):
             #box_info = self.cv2[i](x[i]) # get the information of the bounding box , output of cv2
             
-
             x[i] = torch.cat( self.cv2[i](x[i]), self.cv3[i](x[i]), 1)
-    
+
         if self.training:  # Training path
             return x
         
@@ -161,6 +192,8 @@ class DetectFCN(nn.Module):
         else:
             box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
 
+        print('box shape is ' , box.shape)
+        print('cls shape is ' , cls.shape)
         
 
         if self.export and self.format in {"tflite", "edgetpu"}:
@@ -173,6 +206,8 @@ class DetectFCN(nn.Module):
             dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+            print('after decode boxes dbox size is : ' , dbox.shape)
+            
 
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
