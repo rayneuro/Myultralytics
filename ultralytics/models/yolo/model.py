@@ -56,6 +56,7 @@ class YOLO(Model):
                 "validator": yolo.obb.OBBValidator,
                 "predictor": yolo.obb.OBBPredictor,
             },
+            
         }
 
 

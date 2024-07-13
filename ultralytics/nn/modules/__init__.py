@@ -62,7 +62,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
-from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, DetectFCN
+from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, DetectFCN , OBBFCN
 from .transformer import (
     AIFI,
     MLP,
@@ -112,6 +112,7 @@ __all__ = (
     "BottleneckCSP",
     "Proto",
     "Detect",
+    "DetectFCN"
     "Segment",
     "Pose",
     "Classify",
@@ -125,6 +126,7 @@ __all__ = (
     "MLP",
     "ResNetLayer",
     "OBB",
+    "OBBFCN",
     "WorldDetect",
     "ImagePoolingAttn",
     "ContrastiveHead",

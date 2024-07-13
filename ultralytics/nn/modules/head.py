@@ -5,6 +5,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.init import constant_, xavier_uniform_
 
 from ultralytics.utils.tal import TORCH_1_10, dist2bbox, dist2rbox, make_anchors
@@ -14,7 +15,7 @@ from .conv import Conv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder"
+__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder" , "DetectFCN" , "OBBFCN"
 
 
 class Detect(nn.Module):
@@ -44,6 +45,10 @@ class Detect(nn.Module):
         self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
         
+        #Add for the bbox information to the cls information
+        self.fc1 = nn.Linear(7,16)
+        self.fc2 = nn.Linear(16,3)
+        self.relu = nn.LeakyReLU(0.1)
         
 
     def forward(self, x):
@@ -51,33 +56,35 @@ class Detect(nn.Module):
         
         for i in range(self.nl):
 
-            
             #print(x[i])
-
             x_box = self.cv2[i](x[i])
             x_cls = self.cv3[i](x[i])
+
+            '''
             print('at' , i , "channel ")
             print('x_box input shape is ')
             print(x_box.shape)
             print('x_cls input shape is ')
             print(x_cls.shape)
+            '''
 
             #x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
             x[i] = torch.cat((x_box,x_cls),1)
-            
-
-            
+        
             #print(self.cv2[i](x[i]).shape)
             #print(self.cv3[i](x[i]).shape)
-            print('The cat result of shape cv2 cv3 at i =', i)
-            print(x[i].shape)
-            print("###################")
+       
+            #print('The cat result of shape cv2 cv3 at i =', i)
+            #print(x[i].shape)
+            #print("###################")
             
         if self.training:  # Training path
             return x
 
         # Inference path
         shape = x[0].shape  # BCHW
+        print('self.stride is : ' , self.stride.size())
+
         x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
         print('x_cat size torch.cat([xi.view(shape[0], self.no, -1) for xi in x]is ')
         print(x_cat.shape)
@@ -109,16 +116,31 @@ class Detect(nn.Module):
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
             print('after decode boxes dbox size is : ')
+            # After decode boxes it become  xywh
             print(dbox.shape)
 
-        # cls = cls * 
-
+        
+        '''
         print('test transpose')
         dboxtr = dbox.transpose(1,2)
         print(dboxtr.shape)
+        clstr = clstr.transpose(1,2)
+
+        cls_dbox = torch.cat((dboxtr, clstr), 2)
+        '''
+        #Add for the bbox information to the cls information
+        #print('test transpose of dbox and cls: ')
+        #dboxtr = dbox.transpose(1,2)
+        #print(dboxtr.shape)
+        #clstr = cls.transpose(1,2)
+
+        cls_dbox = torch.cat((dbox.transpose(1,2), cls.transpose(1,2)), 2)
+        
+        # cls plus ddox information
+        cls_dbox = self.relu(self.fc2(self.relu(self.fc1(cls_dbox))))
         
 
-        y = torch.cat((dbox, cls.sigmoid()), 1)
+        y = torch.cat((dbox, cls_dbox.transpose(1,2).sigmoid()), 1)
         return y if self.export else (y, x)
 
     def bias_init(self):
@@ -163,7 +185,12 @@ class DetectFCN(nn.Module):
         self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3) , nn.Conv2d(c3, self.nc, 1)) for x in ch)
         
         self.get_info_4dbox = nn.ModuleList(nn.Sequential(nn.Flatten()) for x in ch)
+
+        #Add for the bbox information to the cls information
+        self.fc1 = nn.Linear(7,16)
+        self.fc2 = nn.Linear(16,3)
         
+
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
 
     def forward(self, x):
@@ -192,8 +219,8 @@ class DetectFCN(nn.Module):
         else:
             box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
 
-        print('box shape is ' , box.shape)
-        print('cls shape is ' , cls.shape)
+        #print('box shape is ' , box.shape)
+        #print('cls shape is ' , cls.shape)
         
 
         if self.export and self.format in {"tflite", "edgetpu"}:
@@ -206,8 +233,19 @@ class DetectFCN(nn.Module):
             dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
-            print('after decode boxes dbox size is : ' , dbox.shape)
-            
+            #print('after decode boxes dbox size is : ' , dbox.shape)
+
+        print('test transpose of dbox and cls: ')
+        dboxtr = dbox.transpose(1,2)
+        print(dboxtr.shape)
+        clstr = clstr.transpose(1,2)
+
+        cls_dbox = torch.cat((dboxtr, clstr), 2)
+        
+        # cls plus ddox information
+        cls = nn.LeakyReLU(self.fc2(nn.LeakyReLU(self.fc1(cls_dbox))))
+
+        cls = cls.transpose(1,2)
 
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
@@ -251,6 +289,36 @@ class Segment(Detect):
 
 
 class OBB(Detect):
+    """YOLOv8 OBB detection head for detection with rotation models."""
+
+    def __init__(self, nc=80, ne=1, ch=()):
+        """Initialize OBB with number of classes `nc` and layer channels `ch`."""
+        super().__init__(nc, ch)
+        self.ne = ne  # number of extra parameters
+
+        c4 = max(ch[0] // 4, self.ne)
+        self.cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.ne, 1)) for x in ch)
+
+    def forward(self, x):
+        """Concatenates and returns predicted bounding boxes and class probabilities."""
+        bs = x[0].shape[0]  # batch size
+        angle = torch.cat([self.cv4[i](x[i]).view(bs, self.ne, -1) for i in range(self.nl)], 2)  # OBB theta logits
+        # NOTE: set `angle` as an attribute so that `decode_bboxes` could use it.
+        angle = (angle.sigmoid() - 0.25) * math.pi  # [-pi/4, 3pi/4]
+        # angle = angle.sigmoid() * math.pi / 2  # [0, pi/2]
+        if not self.training:
+            self.angle = angle
+        x = Detect.forward(self, x)
+        if self.training:
+            return x, angle
+        return torch.cat([x, angle], 1) if self.export else (torch.cat([x[0], angle], 1), (x[1], angle))
+
+    def decode_bboxes(self, bboxes, anchors):
+        """Decode rotated bounding boxes."""
+        return dist2rbox(bboxes, self.angle, anchors, dim=1)
+
+
+class OBBFCN(DetectFCN):
     """YOLOv8 OBB detection head for detection with rotation models."""
 
     def __init__(self, nc=80, ne=1, ch=()):
