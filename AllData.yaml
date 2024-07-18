@@ -1,0 +1,7 @@
+train : ./AllDataVal/images/train/
+val : ./AllDataVal/images/val/
+
+
+nc : 3
+
+names : ["complete","incomplete","hair"]

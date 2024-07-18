@@ -7,6 +7,6 @@ from ultralytics import YOLO
 
 model = YOLO("yolov8l-obb.yaml")
 
-model.train(data="testing.yaml", epochs=10, imgsz=640)
+model.train(data="10per.yaml", epochs=1300, imgsz=640 )
 
 

@@ -1,0 +1,7 @@
+train : ./2%data/images/train/
+val : ./2%data/images/val/
+
+
+nc : 3
+
+names : ["complete","incomplete","hair"]
