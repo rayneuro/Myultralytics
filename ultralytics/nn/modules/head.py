@@ -46,9 +46,13 @@ class Detect(nn.Module):
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
         
         #Add for the bbox information to the cls information
-        self.fc1 = nn.Linear(7,16)
-        self.fc2 = nn.Linear(16,3)
-        self.relu = nn.LeakyReLU(0.1)
+        self.fc1 = nn.Linear(4,8)
+        self.fc2 = nn.Linear(8,8)
+        self.fc3 = nn.Linear(8,1)
+        self.lrelu = nn.LeakyReLU(0.1)
+        
+        #self.fc4 = nn.Linear(3,3) # concate the information of 
+
         
 
     def forward(self, x):
@@ -60,40 +64,27 @@ class Detect(nn.Module):
             x_box = self.cv2[i](x[i])
             x_cls = self.cv3[i](x[i])
 
-            '''
-            print('at' , i , "channel ")
-            print('x_box input shape is ')
-            print(x_box.shape)
-            print('x_cls input shape is ')
-            print(x_cls.shape)
-            '''
-
             #x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
             x[i] = torch.cat((x_box,x_cls),1)
         
-            #print(self.cv2[i](x[i]).shape)
-            #print(self.cv3[i](x[i]).shape)
-       
-            #print('The cat result of shape cv2 cv3 at i =', i)
-            #print(x[i].shape)
-            #print("###################")
+            
             
         if self.training:  # Training path
             return x
 
         # Inference path
         shape = x[0].shape  # BCHW
-        print('self.stride is : ' , self.stride.size())
+        #print('self.stride is : ' , self.stride.size())
 
         x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
-        print('x_cat size torch.cat([xi.view(shape[0], self.no, -1) for xi in x]is ')
-        print(x_cat.shape)
+        #print('x_cat size torch.cat([xi.view(shape[0], self.no, -1) for xi in x]is ')
+        #print(x_cat.shape)
         if self.dynamic or self.shape != shape:
             self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
-            print('The anchor shape is:')
-            print(self.anchors.shape)
-            print('The strides shape is :')
-            print(self.strides.shape)
+            #print('The anchor shape is:')
+            #print(self.anchors.shape)
+            #print('The strides shape is :')
+            #print(self.strides.shape)
             self.shape = shape
 
         if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:  # avoid TF FlexSplitV ops
@@ -102,8 +93,8 @@ class Detect(nn.Module):
         else:
             box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
 
-        print('box shape is ' , box.shape)
-        print('cls shape is ' , cls.shape)
+        #print('box shape is ' , box.shape)
+        #print('cls shape is ' , cls.shape)
 
         if self.export and self.format in {"tflite", "edgetpu"}:
             # Precompute normalization factor to increase numerical stability
@@ -115,32 +106,49 @@ class Detect(nn.Module):
             dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
-            print('after decode boxes dbox size is : ')
+            #print('after decode boxes dbox size is : ')
             # After decode boxes it become  xywh
-            print(dbox.shape)
+            #print(dbox.shape)
 
         
-        '''
-        print('test transpose')
-        dboxtr = dbox.transpose(1,2)
-        print(dboxtr.shape)
-        clstr = clstr.transpose(1,2)
+        #dboxtr = dbox.transpose(1,2)
+        #print(dboxtr.shape)
+        #clstr = clstr.transpose(1,2)
 
-        cls_dbox = torch.cat((dboxtr, clstr), 2)
-        '''
+        #cls_dbox = torch.cat((dboxtr, clstr), 2)
+        
         #Add for the bbox information to the cls information
         #print('test transpose of dbox and cls: ')
         #dboxtr = dbox.transpose(1,2)
         #print(dboxtr.shape)
         #clstr = cls.transpose(1,2)
 
-        cls_dbox = torch.cat((dbox.transpose(1,2), cls.transpose(1,2)), 2)
+        
+        #cls_dbox = torch.cat((dbox.transpose(1,2), cls.transpose(1,2)), 2)
         
         # cls plus ddox information
-        cls_dbox = self.relu(self.fc2(self.relu(self.fc1(cls_dbox))))
-        
+        #cls_dbox = self.relu(self.fc2(self.relu(self.fc1(cls_dbox))))
 
-        y = torch.cat((dbox, cls_dbox.transpose(1,2).sigmoid()), 1)
+        dbox_info = self.lrelu(self.fc1(dbox.transpose(1,2)))
+        dbox_info = self.lrelu(self.fc2(dbox_info))
+        dbox_info = self.lrelu(self.fc3(dbox_info)) # Get the info of whether it is incomplete
+
+        
+        #cls_dbox = torch.add((dbox_info, cls.transpose(1,2),dbox_info), 2)
+        
+        print("cls shape is " ,cls.shape)
+        print("dbox_info shape is " ,dbox_info.shape)
+        cls_dbox = torch.cat((torch.zeros(dbox_info.shape).to('cuda:0'), dbox_info, torch.zeros(dbox_info.shape).to('cuda:0')),dim = 2)
+        
+        cls = cls.transpose(1,2) + cls_dbox
+        
+        #print('cls_dbox shape is : ')
+        
+        
+        
+        #y = torch.cat((dbox, cls_dbox.transpose(1,2).sigmoid()), 1)
+        
+        y = torch.cat((dbox, cls.transpose(1,2).sigmoid()), 1)
         return y if self.export else (y, x)
 
     def bias_init(self):
