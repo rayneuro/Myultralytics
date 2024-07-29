@@ -8,7 +8,7 @@ from ultralytics.models.yolo.detect import DetectionValidator
 from ultralytics.utils import LOGGER, ops
 from ultralytics.utils.metrics import OBBMetrics, batch_probiou
 from ultralytics.utils.plotting import output_to_rotated_target, plot_images
-
+from ultralytics.utils.ops import xywhr2xyxyxyxy
 
 class OBBValidator(DetectionValidator):
     """
@@ -38,7 +38,10 @@ class OBBValidator(DetectionValidator):
 
     def postprocess(self, preds):
         """Apply Non-maximum suppression to prediction outputs."""
-        return ops.non_max_suppression(
+        
+        #print("preds shape in postprocess: ", preds.shape)
+        #print("self.label",self.lb)
+        preds = ops.non_max_suppression(
             preds,
             self.args.conf,
             self.args.iou,
@@ -49,6 +52,57 @@ class OBBValidator(DetectionValidator):
             max_det=self.args.max_det,
             rotated=True,
         )
+        print("Preds is at obbvalidator",preds)
+        print('preds shape is',preds[0].shape)
+        return preds
+        """
+        preds = ops.non_max_suppression(
+            preds,
+            self.args.conf,
+            self.args.iou,
+            agnostic=self.args.agnostic_nms,
+            max_det=self.args.max_det,
+            nc= self.nc,
+            classes=self.args.classes,
+            rotated=True,
+        )
+        #print("preds len after nms: ", len(preds))
+        #print("preds[0] after nms: ", preds[0].size())
+        if not isinstance(orig_imgs, list):  # input images are a torch.Tensor, not a list
+            print("input images are a torch.Tensor, not a list")
+            orig_imgs = ops.convert_torch2numpy_batch(orig_imgs)
+
+        
+        
+        results = []
+        for pred, orig_img, img_path in zip(preds, orig_imgs, self.batch[0]):
+            #print("pred.size() in predictor : ", pred.size())
+            rboxes = ops.regularize_rboxes(torch.cat([pred[:, :4], pred[:, -1:]], dim=-1))
+            rboxes[:, :4] = ops.scale_boxes(img.shape[2:], rboxes[:, :4], orig_img.shape, xywh=True) # scale box output x1y1x2y2 to original xywh ?
+            # (x1 ,y1 ,x2 ,y2 , r)or  (xywhr )?
+            
+            rboxes_predict = xywhr2xyxyxyxy(rboxes) # convert xywhr to xyxyxyxy
+            
+            
+            orig_shape = orig_img.shape[:2] # get original image shape
+            
+            rboxes_predict[..., 0] /= orig_shape[1] # h
+            rboxes_predict[..., 1] /= orig_shape[0] # w
+            
+            #print('rboxes_predict is',rboxes_predict)
+            rboxes_predict = rboxes_predict.reshape(-1, 8)
+            #print('rboxes_predict shape',rboxes_predict.shape)
+            
+            
+                
+            #result = model(rboxes_predict) # [ n, 2]
+        
+            for i in range(rboxes_predict.shape[0]):
+                for j in range(8):
+                    if (rboxes_predict[i][j] <= 0 or rboxes_predict[i][j] >= 1) and pred[i][5] == 0.0:
+                        pred[i][5] = 1.0
+        """
+        
 
     def _process_batch(self, detections, gt_bboxes, gt_cls):
         """

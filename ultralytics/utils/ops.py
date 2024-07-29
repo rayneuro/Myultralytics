@@ -9,9 +9,40 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
+
+
+
 
 from ultralytics.utils import LOGGER
 from ultralytics.utils.metrics import batch_probiou
+
+
+class incomplete_cls(nn.Module):
+    def __init__(self):
+        super(incomplete_cls, self).__init__()
+        
+        self.layers = nn.Sequential(
+            nn.Linear(8, 16),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(16, 8),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(8, 2)  # 2 classes ,0 for complete and 1 for incomplete
+        )
+        
+        self.dropout = nn.Dropout(0.1) # 10% probability of dropout
+        
+        
+
+    def forward(self, x):
+        
+        x = self.layers(x)
+        #print('x shape is' ,x.shape)
+        out = x.squeeze(1) # (B,1)
+        #print('out shape is' , out.shape)
+        return out
 
 
 class Profile(contextlib.ContextDecorator):
@@ -156,6 +187,10 @@ def nms_rotated(boxes, scores, threshold=0.45):
     boxes = boxes[sorted_idx]
     ious = batch_probiou(boxes, boxes).triu_(diagonal=1)
     pick = torch.nonzero(ious.max(dim=0)[0] < threshold).squeeze_(-1)
+    # pick is tensor of indices of boxes to keep
+    #print('pick is :', pick)
+    #print('pick shape is :', pick.shape)
+    
     return sorted_idx[pick]
 
 
@@ -207,12 +242,15 @@ def non_max_suppression(
     """
     import torchvision  # scope for faster 'import ultralytics'
 
+    #print("prediction shape", prediction.size())
     # Checks
     assert 0 <= conf_thres <= 1, f"Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0"
     assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
     if isinstance(prediction, (list, tuple)):  # YOLOv8 model in validation model, output = (inference_out, loss_out)
+        print("prediction is list or tuple")
         prediction = prediction[0]  # select only inference output
 
+    print("prediction shape", prediction.shape) # shape(1, 4 + cls + masks ,6300)
     bs = prediction.shape[0]  # batch size
     nc = nc or (prediction.shape[1] - 4)  # number of classes
     nm = prediction.shape[1] - nc - 4
@@ -276,7 +314,7 @@ def non_max_suppression(
         scores = x[:, 4]  # scores
         if rotated:
             boxes = torch.cat((x[:, :2] + c, x[:, 2:4], x[:, -1:]), dim=-1)  # xywhr
-            i = nms_rotated(boxes, scores, iou_thres)
+            i = nms_rotated(boxes, scores, iou_thres) 
         else:
             boxes = x[:, :4] + c  # boxes (offset by class)
             i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
@@ -298,7 +336,8 @@ def non_max_suppression(
         if (time.time() - t) > time_limit:
             LOGGER.warning(f"WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded")
             break  # time limit exceeded
-
+    
+    # For rotated boxes, convert back to [xywhr (5) + confidence + cls]
     return output
 
 

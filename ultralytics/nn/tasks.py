@@ -14,7 +14,6 @@ from ultralytics.nn.modules import (
     C3,
     C3TR,
     OBB,
-    OBBFCN,
     SPP,
     SPPELAN,
     SPPF,
@@ -33,7 +32,6 @@ from ultralytics.nn.modules import (
     Conv2,
     ConvTranspose,
     Detect,
-    DetectFCN,
     DWConv,
     DWConvTranspose2d,
     Focus,
@@ -234,7 +232,7 @@ class BaseModel(nn.Module):
         """
         self = super()._apply(fn)
         m = self.model[-1]  # Detect()
-        if isinstance(m, Detect or DetectFCN):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
+        if isinstance(m, Detect or OBB ):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
             m.stride = fn(m.stride)
             m.anchors = fn(m.anchors)
             m.strides = fn(m.strides)
@@ -293,10 +291,10 @@ class DetectionModel(BaseModel):
 
         # Build strides
         m = self.model[-1]  # Detect()
-        if isinstance(m, Detect or DetectFCN):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
+        if isinstance(m, Detect or OBB):  # includes all Detect subclasses like Segment, Pose, OBB, WorldDetect
             s = 256  # 2x min stride
             m.inplace = self.inplace
-            forward = lambda x: self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB , OBBFCN)) else self.forward(x)
+            forward = lambda x: self.forward(x)[0] if isinstance(m, (Segment, Pose, OBB )) else self.forward(x)
             m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
             self.stride = m.stride
             m.bias_init()  # only run once
@@ -916,10 +914,21 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, DetectFCN ,WorldDetect, Segment, Pose, OBB,ImagePoolingAttn}:
+        elif m in {Detect,WorldDetect, Segment, Pose, OBB,ImagePoolingAttn}:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
+        elif m is CBAM:
+            """
+            ch[f]:上一层的
+            args[0]:第0个参数
+            c1:输入通道数
+            c2:输出通道数
+            """
+            c1, c2 = ch[f], args[0]
+            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+                c2 = make_divisible(c2 * width, 8)
+            args = [c1,*args[1:]]
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])
         elif m is CBLinear:
@@ -1031,9 +1040,9 @@ def guess_model_task(model):
                 return "classify"
             elif isinstance(m, Pose):
                 return "pose"
-            elif isinstance(m, (OBB ,OBBFCN)):
+            elif isinstance(m, (OBB)):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect,DetectFCN)):
+            elif isinstance(m, (Detect, WorldDetect)):
                 return "detect"
 
     # Guess from model filename

@@ -15,7 +15,7 @@ from .conv import Conv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder" , "DetectFCN" , "OBBFCN"
+__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder" , "DetectFCN" 
 
 
 class Detect(nn.Module):
@@ -46,10 +46,6 @@ class Detect(nn.Module):
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
         
         #Add for the bbox information to the cls information
-        self.fc1 = nn.Linear(4,8)
-        self.fc2 = nn.Linear(8,8)
-        self.fc3 = nn.Linear(8,1)
-        self.lrelu = nn.LeakyReLU(0.1)
         
         #self.fc4 = nn.Linear(3,3) # concate the information of 
 
@@ -67,10 +63,36 @@ class Detect(nn.Module):
             #x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
             x[i] = torch.cat((x_box,x_cls),1)
         
-            
-            
-        if self.training:  # Training path
-            return x
+        
+        # we need to get the information of the bounding box and the cls information ,so make anchor and decode bbox first
+        '''
+        shape = x[0].shape
+        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
+        self.shape = shape
+        box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+        dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+        
+        
+        shape = x[0].shape # BCHW
+        
+        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
+        self.shape = shape
+        box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+        dbox = self.pre_decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
+        
+        
+        incomplete_info = self.lrelu(self.fc1(dbox.transpose(1,2)))
+        incomplete_info = self.lrelu(self.fc2(incomplete_info))
+        inomplete_info = self.lrelu(self.fc3(incomplete_info)) # Get the info of whether it is incomplete
+        '''
+
+        # default path 
+        
+        if self.training:  # Training path , go TaskAlignedAssigner
+            return x 
+        
 
         # Inference path
         shape = x[0].shape  # BCHW
@@ -103,6 +125,7 @@ class Detect(nn.Module):
             grid_w = shape[3]
             grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
             norm = self.strides / (self.stride[0] * grid_size)
+            print('call the decode_bboxes :')
             dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2])
         else:
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
@@ -111,45 +134,28 @@ class Detect(nn.Module):
             #print(dbox.shape)
 
         
-        #dboxtr = dbox.transpose(1,2)
-        #print(dboxtr.shape)
-        #clstr = clstr.transpose(1,2)
-
-        #cls_dbox = torch.cat((dboxtr, clstr), 2)
         
-        #Add for the bbox information to the cls information
-        #print('test transpose of dbox and cls: ')
-        #dboxtr = dbox.transpose(1,2)
-        #print(dboxtr.shape)
-        #clstr = cls.transpose(1,2)
+        
+       
 
         
-        #cls_dbox = torch.cat((dbox.transpose(1,2), cls.transpose(1,2)), 2)
-        
-        # cls plus ddox information
-        #cls_dbox = self.relu(self.fc2(self.relu(self.fc1(cls_dbox))))
-
+        '''
         dbox_info = self.lrelu(self.fc1(dbox.transpose(1,2)))
         dbox_info = self.lrelu(self.fc2(dbox_info))
         dbox_info = self.lrelu(self.fc3(dbox_info)) # Get the info of whether it is incomplete
-
-        
-        #cls_dbox = torch.add((dbox_info, cls.transpose(1,2),dbox_info), 2)
-        
-        print("cls shape is " ,cls.shape)
-        print("dbox_info shape is " ,dbox_info.shape)
-        cls_dbox = torch.cat((torch.zeros(dbox_info.shape).to('cuda:0'), dbox_info, torch.zeros(dbox_info.shape).to('cuda:0')),dim = 2)
-        
-        cls = cls.transpose(1,2) + cls_dbox
-        
-        #print('cls_dbox shape is : ')
+        '''
         
         
         
-        #y = torch.cat((dbox, cls_dbox.transpose(1,2).sigmoid()), 1)
+        y = torch.cat((dbox, cls.sigmoid()), 1) #  [b , 4 , 7056] + [b , 16 + 3 (self.no) , 7056]
         
-        y = torch.cat((dbox, cls.transpose(1,2).sigmoid()), 1)
-        return y if self.export else (y, x)
+        
+        #if self.training:  # Training path , go TaskAlignedAssigner
+        #    return x 
+        
+        
+        
+        return y if self.export else (y, x) 
 
     def bias_init(self):
         """Initialize Detect() biases, WARNING: requires stride availability."""
@@ -163,6 +169,8 @@ class Detect(nn.Module):
     def decode_bboxes(self, bboxes, anchors):
         """Decode bounding boxes."""
         return dist2bbox(bboxes, anchors, xywh=True, dim=1)
+
+    
 
 class DetectFCN(nn.Module):
     """YOLOv8 Detect head for detection models."""
@@ -192,11 +200,12 @@ class DetectFCN(nn.Module):
 
         self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3) , nn.Conv2d(c3, self.nc, 1)) for x in ch)
         
-        self.get_info_4dbox = nn.ModuleList(nn.Sequential(nn.Flatten()) for x in ch)
+        
 
         #Add for the bbox information to the cls information
         self.fc1 = nn.Linear(7,16)
         self.fc2 = nn.Linear(16,3)
+        
         
 
         self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
@@ -243,9 +252,9 @@ class DetectFCN(nn.Module):
             dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0)) * self.strides
             #print('after decode boxes dbox size is : ' , dbox.shape)
 
-        print('test transpose of dbox and cls: ')
+        #print('test transpose of dbox and cls: ')
         dboxtr = dbox.transpose(1,2)
-        print(dboxtr.shape)
+        #print(dboxtr.shape)
         clstr = clstr.transpose(1,2)
 
         cls_dbox = torch.cat((dboxtr, clstr), 2)
@@ -254,7 +263,7 @@ class DetectFCN(nn.Module):
         cls = nn.LeakyReLU(self.fc2(nn.LeakyReLU(self.fc1(cls_dbox))))
 
         cls = cls.transpose(1,2)
-
+        
         y = torch.cat((dbox, cls.sigmoid()), 1)
         return y if self.export else (y, x)
 
@@ -296,6 +305,7 @@ class Segment(Detect):
         return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))
 
 
+
 class OBB(Detect):
     """YOLOv8 OBB detection head for detection with rotation models."""
 
@@ -303,57 +313,256 @@ class OBB(Detect):
         """Initialize OBB with number of classes `nc` and layer channels `ch`."""
         super().__init__(nc, ch)
         self.ne = ne  # number of extra parameters
-
+        
         c4 = max(ch[0] // 4, self.ne)
+        
         self.cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.ne, 1)) for x in ch)
+        self.fc1 = nn.Linear(4,8)
+        self.fc2 = nn.Linear(8,8)
+        self.fc3 = nn.Linear(8,1)
+        self.lrelu = nn.LeakyReLU(0.1)
+        
 
     def forward(self, x):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
         bs = x[0].shape[0]  # batch size
+
+        #print('x.size() is',x.size())
+
+        #print('x[0] shape is ' ,x[0].shape)
+        
         angle = torch.cat([self.cv4[i](x[i]).view(bs, self.ne, -1) for i in range(self.nl)], 2)  # OBB theta logits
+        
+        
         # NOTE: set `angle` as an attribute so that `decode_bboxes` could use it.
+        angle2train = ((angle.sigmoid() - 0.25) * math.pi ).contiguous()
+        
+        #self.angle_2_train = angle2train
         angle = (angle.sigmoid() - 0.25) * math.pi  # [-pi/4, 3pi/4]
+        
+        
+        
         # angle = angle.sigmoid() * math.pi / 2  # [0, pi/2]
+        
+
+        # Let incomplete class get the info
+        #print('incomplete class info ok : ')
+        
+
+
         if not self.training:
             self.angle = angle
+        #else:
+            #self.angle_2_train = angle2train
+        
+
+        #self.angle = angle
         x = Detect.forward(self, x)
+        #incomplete_info = self.lrelu(self.fc1(angle))
+        
+        
         if self.training:
             return x, angle
+        
         return torch.cat([x, angle], 1) if self.export else (torch.cat([x[0], angle], 1), (x[1], angle))
 
     def decode_bboxes(self, bboxes, anchors):
         """Decode rotated bounding boxes."""
+        #print('Call the dist2rbox :')
         return dist2rbox(bboxes, self.angle, anchors, dim=1)
+    
 
 
-class OBBFCN(DetectFCN):
-    """YOLOv8 OBB detection head for detection with rotation models."""
+'''
+class OBB(nn.Module):
+    
+    dynamic = False  # force grid reconstruction
+    export = False  # export mode
+    shape = None
+    anchors = torch.empty(0)  # init
+    strides = torch.empty(0)  # init
 
-    def __init__(self, nc=80, ne=1, ch=()):
-        """Initialize OBB with number of classes `nc` and layer channels `ch`."""
-        super().__init__(nc, ch)
+    def __init__(self, nc=80, ne = 1, ch=()):
+        """Initializes the YOLOv8 detection layer with specified number of classes and channels."""
+        super().__init__()
+        self.nc = nc  # number of classes
         self.ne = ne  # number of extra parameters
-
+        self.nl = len(ch)  # number of detection layers
+        self.reg_max = 16  # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
+        
+        self.no = nc + self.reg_max * 4  # number of outputs per anchor
+        self.stride = torch.zeros(self.nl)  # strides computed during build
+        c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels
+        
+        
         c4 = max(ch[0] // 4, self.ne)
+        
+        self.cv2 = nn.ModuleList(
+            nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * self.reg_max, 1)) for x in ch
+        )
+        
+        self.cv3 = nn.ModuleList(nn.Sequential(Conv(x, c3, 3), Conv(c3, c3, 3), nn.Conv2d(c3, self.nc, 1)) for x in ch)
+        c4 = max(ch[0] // 4, self.ne)
+        
+        #for angle detect
         self.cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.ne, 1)) for x in ch)
-
+        
+        
+        #Linear Layer for incomplete information
+        self.fc1 = nn.Linear(4,8)
+        self.fc2 = nn.Linear(8,8)
+        self.fc3 = nn.Linear(8,1)
+        self.lrelu = nn.LeakyReLU(0.1)
+        
+        
+        self.dfl = DFL(self.reg_max) if self.reg_max > 1 else nn.Identity()
+        
     def forward(self, x):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
+        
+
         bs = x[0].shape[0]  # batch size
+
+        
+        
         angle = torch.cat([self.cv4[i](x[i]).view(bs, self.ne, -1) for i in range(self.nl)], 2)  # OBB theta logits
+        
         # NOTE: set `angle` as an attribute so that `decode_bboxes` could use it.
+        
+        
+        #self.angle_2_train = angle2train
         angle = (angle.sigmoid() - 0.25) * math.pi  # [-pi/4, 3pi/4]
-        # angle = angle.sigmoid() * math.pi / 2  # [0, pi/2]
         if not self.training:
             self.angle = angle
-        x = Detect.forward(self, x)
-        if self.training:
-            return x, angle
+        
+        for i in range(self.nl):
+
+            #print(x[i])
+            x_box = self.cv2[i](x[i])
+            x_cls = self.cv3[i](x[i])
+
+            #x[i] = torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1)
+            x[i] = torch.cat((x_box,x_cls),1)
+        
+        
+
+        # default path 
+        #if self.training:  # Training path , go TaskAlignedAssigner
+            #return x 
+        
+
+        # Inference path
+        shape = x[0].shape  # BCHW
+        #print('self.stride is : ' , self.stride.size())
+
+        x_cat = torch.cat([xi.view(shape[0], self.no, -1) for xi in x], 2)
+        
+        if self.dynamic or self.shape != shape:
+            self.anchors, self.strides = (x.transpose(0, 1) for x in make_anchors(x, self.stride, 0.5))
+            self.shape = shape
+        
+
+        if self.export and self.format in {"saved_model", "pb", "tflite", "edgetpu", "tfjs"}:  # avoid TF FlexSplitV ops
+            box = x_cat[:, : self.reg_max * 4]
+            cls = x_cat[:, self.reg_max * 4 :]
+        else:
+            box, cls = x_cat.split((self.reg_max * 4, self.nc), 1)
+
+        #print('box shape is ' , box.shape)
+        #print('cls shape is ' , cls.shape)
+
+        if self.export and self.format in {"tflite", "edgetpu"}:
+            # Precompute normalization factor to increase numerical stability
+            # See https://github.com/ultralytics/ultralytics/issues/7371
+            grid_h = shape[2]
+            grid_w = shape[3]
+            grid_size = torch.tensor([grid_w, grid_h, grid_w, grid_h], device=box.device).reshape(1, 4, 1)
+            norm = self.strides / (self.stride[0] * grid_size)
+            dbox = self.decode_bboxes(self.dfl(box) * norm, self.anchors.unsqueeze(0) * norm[:, :2] ,angle)
+        else:
+            dbox = self.decode_bboxes(self.dfl(box), self.anchors.unsqueeze(0) , angle) * self.strides
+            #print('after decode boxes dbox size is : ')
+            # After decode boxes it become  xywh
+            #print(dbox.shape)
+
+        
+        #dboxtr = dbox.transpose(1,2)
+        #print(dboxtr.shape)
+        #clstr = clstr.transpose(1,2)
+
+        #cls_dbox = torch.cat((dboxtr, clstr), 2)
+        
+        #Add for the bbox information to the cls information
+        #print('test transpose of dbox and cls: ')
+        #dboxtr = dbox.transpose(1,2)
+        #print(dboxtr.shape)
+        #clstr = cls.transpose(1,2)
+
+        
+        #cls_dbox = torch.cat((dbox.transpose(1,2), cls.transpose(1,2)), 2)
+        
+        # cls plus ddox information
+        #cls_dbox = self.relu(self.fc2(self.relu(self.fc1(cls_dbox))))
+
+        
+        # inncomplete network work
+        #dbox_info = self.lrelu(self.fc1(dbox.transpose(1,2)))
+        #dbox_info = self.lrelu(self.fc2(dbox_info))
+        #dbox_info = self.lrelu(self.fc3(dbox_info)) # Get the info of whether it is incomplete
+        
+        
+        
+        
+        
+        
+        #print("cls shape is " ,cls.shape)
+        #print("dbox_info shape is " ,dbox_info.shape)
+        
+        #cls_dbox = torch.cat((torch.zeros(dbox_info.shape).to('cuda:0'), dbox_info, torch.zeros(dbox_info.shape).to('cuda:0')),dim = 2)
+        
+        #cls = cls.transpose(1,2) + cls_dbox
+        
+        #print('cls_dbox shape is : ')
+        
+        
+        #y = torch.cat((dbox, cls_dbox.transpose(1,2).sigmoid()), 1)
+        
+        y = torch.cat((dbox, cls.sigmoid()), 1) #  [b , 4 , 7056] + [b , 16 + 3 (self.no) , 7056]
+        
+        
+        if self.training:  # Training path , go TaskAlignedAssigner
+            return x,angle
+        
+        
+        
+        #print('self export is :' ,self.export)
+        
+        if self.export : 
+            pass
+        else : 
+            x = (y, x)  # y is the predict of original Detect head , x is the predict of OBB head
+        
         return torch.cat([x, angle], 1) if self.export else (torch.cat([x[0], angle], 1), (x[1], angle))
 
-    def decode_bboxes(self, bboxes, anchors):
+    def bias_init(self):
+        """Initialize Detect() biases, WARNING: requires stride availability."""
+        m = self  # self.model[-1]  # Detect() module
+        # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1
+        # ncf = math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # nominal class frequency
+        for a, b, s in zip(m.cv2, m.cv3, m.stride):  # from
+            a[-1].bias.data[:] = 1.0  # box
+            b[-1].bias.data[: m.nc] = math.log(5 / m.nc / (640 / s) ** 2)  # cls (.01 objects, 80 classes, 640 img)
+
+    
+    def decode_bboxes(self, bboxes, anchors ,angle):
         """Decode rotated bounding boxes."""
-        return dist2rbox(bboxes, self.angle, anchors, dim=1)
+        #print('Call the dist2rbox :')
+        return dist2rbox(bboxes, angle, anchors, dim=1)
+
+'''
+        
+    
+
 
 
 class Pose(Detect):

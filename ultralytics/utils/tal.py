@@ -58,8 +58,10 @@ class TaskAlignedAssigner(nn.Module):
         """
         self.bs = pd_scores.shape[0]
         self.n_max_boxes = gt_bboxes.shape[1]
+        #print('In TAL forward function: ')
 
         if self.n_max_boxes == 0:
+            #print('self.name_boxes is 0: ')
             device = gt_bboxes.device
             return (
                 torch.full_like(pd_scores[..., 0], self.bg_idx).to(device),
@@ -77,7 +79,9 @@ class TaskAlignedAssigner(nn.Module):
 
         # Assigned target
         target_labels, target_bboxes, target_scores = self.get_targets(gt_labels, gt_bboxes, target_gt_idx, fg_mask)
-
+        #print('target_lables shape is: ... ' ,target_labels.shape)
+        #print('taget label is :' , target_labels)
+        #print('target_bboxes shape is: ... ' ,target_bboxes.shape)
         # Normalize
         align_metric *= mask_pos
         pos_align_metrics = align_metric.amax(dim=-1, keepdim=True)  # b, max_num_obj
@@ -207,6 +211,9 @@ class TaskAlignedAssigner(nn.Module):
         fg_scores_mask = fg_mask[:, :, None].repeat(1, 1, self.num_classes)  # (b, h*w, 80)
         target_scores = torch.where(fg_scores_mask > 0, target_scores, 0)
 
+        
+
+        
         return target_labels, target_bboxes, target_scores
 
     @staticmethod
@@ -239,8 +246,6 @@ class TaskAlignedAssigner(nn.Module):
 
         Returns:
             target_gt_idx (Tensor): shape(b, h*w)
-            fg_mask (Tensor): shape(b, h*w)
-            mask_pos (Tensor): shape(b, n_max_boxes, h*w)
         """
         # (b, n_max_boxes, h*w) -> (b, h*w)
         fg_mask = mask_pos.sum(-2)
@@ -341,4 +346,6 @@ def dist2rbox(pred_dist, pred_angle, anchor_points, dim=-1):
     xf, yf = ((rb - lt) / 2).split(1, dim=dim)
     x, y = xf * cos - yf * sin, xf * sin + yf * cos
     xy = torch.cat([x, y], dim=dim) + anchor_points
+    #print('The shape of dist2rbox :')
+    #print(torch.cat([xy, lt + rb], dim=dim).shape)
     return torch.cat([xy, lt + rb], dim=dim)

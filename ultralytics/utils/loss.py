@@ -155,6 +155,7 @@ class v8DetectionLoss:
 
         m = model.model[-1]  # Detect() module
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
+        self.incombce = nn.BCEWithLogitsLoss(reduction="none")
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
@@ -607,6 +608,7 @@ class v8OBBLoss(v8DetectionLoss):
         super().__init__(model)
         self.assigner = RotatedTaskAlignedAssigner(topk=10, num_classes=self.nc, alpha=0.5, beta=6.0)
         self.bbox_loss = RotatedBboxLoss(self.reg_max - 1, use_dfl=self.use_dfl).to(self.device)
+        
 
     def preprocess(self, targets, batch_size, scale_tensor):
         """Preprocesses the target counts and matches with the input batch size to output a tensor."""
@@ -628,8 +630,10 @@ class v8OBBLoss(v8DetectionLoss):
 
     def __call__(self, preds, batch):
         """Calculate and return the loss for the YOLO model."""
-        loss = torch.zeros(3, device=self.device)  # box, cls, dfl
+        #loss = torch.zeros(3, device=self.device)  # box, cls, dfl
+        loss = torch.zeros(4, device=self.device)  # box, cls, dfl ,cls_info
         feats, pred_angle = preds if isinstance(preds[0], list) else preds[1]
+        #feats, incomplete_info ,pred_angle  = preds if isinstance(preds[0], list) else preds[1] # add incomplet_info [B , 20*20 + 40*40+ 80*80 , 1]
         batch_size = pred_angle.shape[0]  # batch size, number of masks, mask height, mask width
         pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
             (self.reg_max * 4, self.nc), 1
@@ -637,8 +641,12 @@ class v8OBBLoss(v8DetectionLoss):
 
         # b, grids, ..
         pred_scores = pred_scores.permute(0, 2, 1).contiguous()
+        print('pred_scores shape', pred_scores.shape)
         pred_distri = pred_distri.permute(0, 2, 1).contiguous()
+        print('pred_distri shape', pred_distri.shape)
         pred_angle = pred_angle.permute(0, 2, 1).contiguous()
+        print('pred_angle shape', pred_angle.shape)
+        
 
         dtype = pred_scores.dtype
         imgsz = torch.tensor(feats[0].shape[2:], device=self.device, dtype=dtype) * self.stride[0]  # image size (h,w)
@@ -664,6 +672,10 @@ class v8OBBLoss(v8DetectionLoss):
 
         # Pboxes
         pred_bboxes = self.bbox_decode(anchor_points, pred_distri, pred_angle)  # xyxy, (b, h*w, 4)
+        
+        
+        
+        print('pred_bboxes shape is:',pred_bboxes.shape)
 
         bboxes_for_assigner = pred_bboxes.clone().detach()
         # Only the first four elements need to be scaled
@@ -681,8 +693,19 @@ class v8OBBLoss(v8DetectionLoss):
 
         # Cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
+        #print('The target scores shape is:',target_scores.shape)
+        #print('The target score is:', target_scores)
+        
+        #a = target_scores[0,0,:]
+        
+        
+        
+        #print('The shape of bce loss' , self.bce(pred_scores, target_scores.to(dtype)).shape)
+        
         loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
-
+        #loss[3] = self.bce( , target_scores.to(dtype)).sum() / target_scores_sum  # BCE to imcomplete class info
+        #print('cls loss is:',loss[1])
+        # loss[3] = self.bce(photo_edge_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
         # Bbox loss
         if fg_mask.sum():
             target_bboxes[..., :4] /= stride_tensor
@@ -695,8 +718,9 @@ class v8OBBLoss(v8DetectionLoss):
         loss[0] *= self.hyp.box  # box gain
         loss[1] *= self.hyp.cls  # cls gain
         loss[2] *= self.hyp.dfl  # dfl gain
+       
 
-        return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
+        return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl ,cls_info)
 
     def bbox_decode(self, anchor_points, pred_dist, pred_angle):
         """
